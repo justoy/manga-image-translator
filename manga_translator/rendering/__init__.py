@@ -105,23 +105,20 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
             # logger.debug(f"Needed rows: {needed_rows}")                
 
             if needed_rows > used_rows:
-                scale_x = ((needed_rows - used_rows) / used_rows) * 1 + 1
+                scale_y = ((needed_rows - used_rows) / used_rows) * 1 + 1
                 try:  
                     poly = Polygon(region.unrotated_min_rect[0])
                     minx, miny, maxx, maxy = poly.bounds
-                    poly = affinity.scale(poly, xfact=scale_x, yfact=1.0, origin=(minx, miny))        
+                    poly = affinity.scale(poly, xfact=1.0, yfact=scale_y, origin=(minx, miny))        
                 
                     pts = np.array(poly.exterior.coords[:4])  
                     dst_points = rotate_polygons(  
                         region.center, pts.reshape(1, -1), -region.angle,  
                         to_int=False  
                     ).reshape(-1, 4, 2)  
-                    # 移除边界限制，允许文本超出检测框边界
-                    # dst_points[..., 0] = dst_points[..., 0].clip(0, img.shape[1] - 1)  
-                    # dst_points[..., 1] = dst_points[..., 1].clip(0, img.shape[0] - 1)  
                     dst_points = dst_points.astype(np.int64)
                     single_axis_expanded = True
-                    # logger.debug(f"Successfully expanded horizontal text width: xfact={scale_x:.2f}")  
+                    # logger.debug(f"Successfully expanded horizontal text height: yfact={scale_y:.2f}")  
                 except Exception as e:  
                     # logger.error(f"Failed to expand horizontal text: {e}")  
                     pass
@@ -142,16 +139,14 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                 try:  
                     poly = Polygon(region.unrotated_min_rect[0])
                     minx, miny, maxx, maxy = poly.bounds
-                    poly = affinity.scale(poly, xfact=1.0, yfact=scale_x, origin=(minx, miny))                    
+                    # In vertical manga (RTL), new columns expand to the left (origin=maxx)
+                    poly = affinity.scale(poly, xfact=scale_x, yfact=1.0, origin=(maxx, miny))                    
                     
                     pts = np.array(poly.exterior.coords[:4])  
                     dst_points = rotate_polygons(  
                         region.center, pts.reshape(1, -1), -region.angle,  
                         to_int=False  
                     ).reshape(-1, 4, 2)  
-                    # 移除边界限制，允许文本超出检测框边界
-                    # dst_points[..., 0] = dst_points[..., 0].clip(0, img.shape[1] - 1)  
-                    # dst_points[..., 1] = dst_points[..., 1].clip(0, img.shape[0] - 1)  
                     dst_points = dst_points.astype(np.int64)
                     single_axis_expanded = True
                     # logger.debug(f"Successfully expanded vertical text width: xfact={scale_x:.2f}")  
@@ -403,10 +398,17 @@ def render(
 
     M, _ = cv2.findHomography(src_points, dst_points, cv2.RANSAC, 5.0)
     rgba_region = cv2.warpPerspective(box, M, (img.shape[1], img.shape[0]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-    x, y, w, h = cv2.boundingRect(dst_points.astype(np.int32))
-    canvas_region = rgba_region[y:y+h, x:x+w, :3]
-    mask_region = rgba_region[y:y+h, x:x+w, 3:4].astype(np.float32) / 255.0
-    img[y:y+h, x:x+w] = np.clip((img[y:y+h, x:x+w].astype(np.float32) * (1 - mask_region) + canvas_region.astype(np.float32) * mask_region), 0, 255).astype(np.uint8)
+    alpha = rgba_region[:, :, 3]
+    if np.any(alpha > 0):
+        y_indices, x_indices = np.where(alpha > 0)
+        ymin, ymax = y_indices.min(), y_indices.max() + 1
+        xmin, xmax = x_indices.min(), x_indices.max() + 1
+        canvas_region = rgba_region[ymin:ymax, xmin:xmax, :3]
+        mask_region = rgba_region[ymin:ymax, xmin:xmax, 3:4].astype(np.float32) / 255.0
+        img[ymin:ymax, xmin:xmax] = np.clip(
+            (img[ymin:ymax, xmin:xmax].astype(np.float32) * (1 - mask_region) + canvas_region.astype(np.float32) * mask_region),
+            0, 255
+        ).astype(np.uint8)
     return img
 
 async def dispatch_eng_render(img_canvas: np.ndarray, original_img: np.ndarray, text_regions: List[TextBlock], font_path: str = '', line_spacing: int = 0, disable_font_border: bool = False) -> np.ndarray:

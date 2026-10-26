@@ -290,7 +290,7 @@ class MangaTranslatorLocal(MangaTranslator):
                         img_filename = p + '-orig' + ext
                         img_path = os.path.join(os.path.dirname(dest), img_filename)
                         img.save(img_path, quality=self.save_quality)
-                    if self.text_regions:
+                    if ctx.text_regions:
                         self._save_text_to_file(path, ctx)
                 return True
         return False

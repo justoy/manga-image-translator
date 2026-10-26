@@ -1,6 +1,6 @@
 import os
-from dotenv import load_dotenv
-load_dotenv()
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv(usecwd=True))
 
 # baidu
 BAIDU_APP_ID = os.getenv('BAIDU_APP_ID', '') #你的appid
@@ -31,8 +31,8 @@ SAKURA_DICT_PATH = os.getenv('SAKURA_DICT_PATH', './dict/sakura_dict.txt') #SAKU
 CAIYUN_TOKEN = os.getenv('CAIYUN_TOKEN', '') # 彩云小译API访问令牌
 
 # Gemini
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
-GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash-002')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '') or os.getenv('gemini_key', '') or os.getenv('GEMINI_KEY', '')
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', '') or os.getenv('gemini_model', '') or 'gemini-3.8-flash'
 
 # deepseek
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY', '')
