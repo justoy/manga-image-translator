@@ -313,6 +313,18 @@ class GeminiTranslator(CommonGPTTranslator):
         # If cache expire_time is less than 5 minutes (300 seconds) in the future: return True
         return delta < self._CACHE_TTL_BUFFER
 
+    def _parse_response(self, response: str, queries: List[str]):
+        """Use segment IDs, not response order, to keep bubbles on their pages."""
+        matches = list(re.finditer(r'<\|(\d+)\|>(.*?)(?=<\|\d+\|>|\Z)', response, re.S))
+        ids = [int(match[1]) for match in matches]
+        expected = set(range(1, len(queries) + 1))
+        if len(ids) != len(queries) or set(ids) != expected:
+            raise Warning('Translation IDs are missing, duplicated, or unexpected.')
+        translations = {int(match[1]): match[2].strip() for match in matches}
+        if any(not text for text in translations.values()):
+            raise Warning('Translation contains an empty segment.')
+        return [translations[i] for i in range(1, len(queries) + 1)]
+
     async def _translate(self, from_lang: str, to_lang: str, queries: List[str]) -> List[str]:  
         self.to_lang=to_lang # Export `to_lang`
         translations = [''] * len(queries)  
@@ -321,6 +333,7 @@ class GeminiTranslator(CommonGPTTranslator):
         RETRY_ATTEMPTS = self._RETRY_ATTEMPTS  
 
         async def translate_batch(prompt_queries, prompt_query_indices, split_level=0):  
+            server_error_attempt = 0
             nonlocal MAX_SPLIT_ATTEMPTS
             split_prefix = ' (split)' if split_level > 0 else ''  
 
@@ -411,7 +424,10 @@ class GeminiTranslator(CommonGPTTranslator):
         # Begin translation process  
         prompt_queries = queries  
         prompt_query_indices = list(range(len(queries)))  
-        await translate_batch(prompt_queries, prompt_query_indices)  
+        offset = 0
+        for _, size in self._assemble_prompts(from_lang, to_lang, queries):
+            await translate_batch(prompt_queries[offset:offset + size], prompt_query_indices[offset:offset + size])
+            offset += size
 
         self.logger.debug(translations)  
         if self.token_count_last:  
@@ -479,9 +495,10 @@ class GeminiTranslator(CommonGPTTranslator):
                 self.token_count += response.usage_metadata.prompt_token_count
                 self.token_count_last = response.usage_metadata.total_token_count
             
-            self.logger.debug(f'-- GPT Response --\n' + response.text)
+            response_text = response.text or ''
+            self.logger.debug(f'-- GPT Response --\n' + response_text)
 
-            return response.text
+            return response_text
         except Exception as ex:
             self.logger.error(f"Error in _request_translation: {str(ex)}")
             raise ex

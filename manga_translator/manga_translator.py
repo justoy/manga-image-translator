@@ -1101,14 +1101,6 @@ class MangaTranslator:
                 # For none translator, create an empty translation list  
                 translated_sentences = ["" for _ in ctx.text_regions]  
 
-            # Save translation if args.save_text is set and quit  
-            if self.save_text:  
-                input_filename = os.path.splitext(os.path.basename(self.input_files[0]))[0]  
-                with open(self._result_path(f"{input_filename}_translations.txt"), "w") as f:  
-                    json.dump(translated_sentences, f, indent=4, ensure_ascii=False)  
-                print("Don't continue if --save-text is used")  
-                exit(-1)  
-
         # 如果不是none翻译器或者是none翻译器但没有prep_manual  
         # If not none translator or none translator without prep_manual  
         if config.translator.translator != Translator.none or not self.prep_manual:  
@@ -1461,7 +1453,7 @@ class MangaTranslator:
         Args:
             images_with_configs: List of (image, config) tuples
             batch_size: 批量大小，如果为None则使用实例的batch_size
-            image_names: 已弃用的参数，保留用于兼容性
+            image_names: 页面标识，用于记录每个翻译编号对应的页和气泡
         Returns:
             List of Context objects with translation results
         """
@@ -1567,6 +1559,8 @@ class MangaTranslator:
                     pre_translation_contexts.append((ctx, config))
             except Exception as e:
                 logger.error(f'Image {i+1} pre-processing error: {e}')
+                if not self.ignore_errors:
+                    raise
                 # 创建空context作为占位符
                 ctx = Context()
                 ctx.input = image
@@ -1576,6 +1570,9 @@ class MangaTranslator:
         if not pre_translation_contexts:
             logger.warning('No images pre-processed successfully')
             return results
+
+        for i, (ctx, _) in enumerate(pre_translation_contexts):
+            ctx.page_id = image_names[i] if image_names else str(i + 1)
             
         logger.debug(f'Pre-processing completed: {len(pre_translation_contexts)} images')
             
@@ -1642,6 +1639,8 @@ class MangaTranslator:
                 logger.debug(f'Image {i+1} post-processing completed')
             except Exception as e:
                 logger.error(f'Image {i+1} post-processing error: {e}')
+                if not self.ignore_errors:
+                    raise
                 results.append(ctx)
         
         logger.info(f'Batch translation completed: processed {len(results)} images')
@@ -1829,7 +1828,6 @@ class MangaTranslator:
                 if not ctx.text_regions:
                     continue
                     
-                region_start_idx = len(all_texts)
                 for region_idx, region in enumerate(ctx.text_regions):
                     all_texts.append(region.text)
                     batch_text_mapping.append((ctx_idx, region_idx))
@@ -1851,18 +1849,18 @@ class MangaTranslator:
                 else:
                     translated_texts = all_texts  # 无法翻译时保持原文
                     
-                # 将翻译结果分配回各个context
-                text_idx = 0
-                for ctx_idx, (ctx, config) in enumerate(batch):
-                    if not ctx.text_regions:  # 检查text_regions是否为None或空
-                        continue
-                    for region_idx, region in enumerate(ctx.text_regions):
-                        if text_idx < len(translated_texts):
-                            region.translation = translated_texts[text_idx]
-                            region.target_lang = config.translator.target_lang
-                            region._alignment = config.render.alignment
-                            region._direction = config.render.direction
-                            text_idx += 1
+                if len(translated_texts) != len(batch_text_mapping):
+                    raise ValueError(f'Translation count mismatch: expected {len(batch_text_mapping)}, got {len(translated_texts)}')
+                logger.info('Translation IDs: ' + ', '.join(
+                    f'{i + 1}={getattr(batch[p][0], "page_id", p + 1)}:{b + 1}'
+                    for i, (p, b) in enumerate(batch_text_mapping)))
+                for (ctx_idx, region_idx), translation in zip(batch_text_mapping, translated_texts):
+                    ctx, config = batch[ctx_idx]
+                    region = ctx.text_regions[region_idx]
+                    region.translation = translation
+                    region.target_lang = config.translator.target_lang
+                    region._alignment = config.render.alignment
+                    region._direction = config.render.direction
                         
                 # 应用后处理逻辑（括号修正、过滤等）
                 for ctx, config in batch:
